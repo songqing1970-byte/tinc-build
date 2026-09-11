@@ -1,0 +1,67 @@
+# tinc 1.0.36 纯静态 aarch64 二进制 — GitHub Actions 一键编译
+# 用法：建仓库 → 创建 .github/workflows/build.yml 粘贴本文件 → 手动运行
+name: build-tinc
+
+on:
+  workflow_dispatch:   # 仓库页面手动点按钮运行
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载 musl 交叉编译工具链 (aarch64)
+        run: |
+          curl -fL -o /tmp/tc.tgz https://more.musl.cc/x86_64-linux-musl/aarch64-linux-musl-cross.tgz \
+            || curl -fL -o /tmp/tc.tgz https://musl.cc/aarch64-linux-musl-cross.tgz
+          tar xzf /tmp/tc.tgz -C /opt
+          TC=$(ls -d /opt/aarch64-linux-musl-cross)
+          echo "TC=$TC" >> $GITHUB_ENV
+          $TC/bin/aarch64-linux-musl-gcc --version | head -1
+
+      - name: 下载源码 (tinc 1.0.36 + zlib + openssl)
+        run: |
+          cd /tmp
+          curl -fL -o tinc.tgz https://deb.debian.org/debian/pool/main/t/tinc/tinc_1.0.36.orig.tar.gz
+          curl -fL -o zlib.tgz https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+          curl -fL -o openssl.tgz https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_1_1w.tar.gz
+          tar xzf tinc.tgz && tar xzf zlib.tgz && tar xzf openssl.tgz
+
+      - name: 交叉编译 zlib 静态库
+        run: |
+          cd /tmp/zlib-1.3.1
+          CHOST=aarch64-linux-musl CC=$TC/bin/aarch64-linux-musl-gcc \
+          AR=$TC/bin/aarch64-linux-musl-ar RANLIB=$TC/bin/aarch64-linux-musl-ranlib \
+          ./configure --static --prefix=/tmp/prefix
+          make -j2 && make install
+
+      - name: 交叉编译 OpenSSL 1.1.1w 静态库
+        run: |
+          cd /tmp/openssl-OpenSSL_1_1_1w
+          ./Configure linux-aarch64 no-shared no-tests no-asm \
+            --prefix=/tmp/prefix --openssldir=/tmp/prefix/ssl \
+            --cross-compile-prefix=$TC/bin/aarch64-linux-musl-
+          make -j2 build_libs
+          cp libcrypto.a libssl.a /tmp/prefix/lib/
+          cp -r include/openssl /tmp/prefix/include/
+
+      - name: 交叉编译 tinc 纯静态二进制
+        run: |
+          cd /tmp/tinc-1.0.36
+          ./configure --host=aarch64-linux-musl --prefix=/usr --sysconfdir=/etc/tinc \
+            --with-zlib=/tmp/prefix --with-openssl=/tmp/prefix --disable-lzo \
+            CPPFLAGS="-I/tmp/prefix/include" LDFLAGS="-L/tmp/prefix/lib -static" \
+            CC=$TC/bin/aarch64-linux-musl-gcc CFLAGS="-O2"
+          make -j2
+
+      - name: 验证产物
+        run: |
+          file /tmp/tinc-1.0.36/src/tinc
+          sha256sum /tmp/tinc-1.0.36/src/tinc
+
+      - name: 上传二进制
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinc-aarch64
+          path: /tmp/tinc-1.0.36/src/tinc
