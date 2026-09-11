@@ -31,7 +31,7 @@ jobs:
             make -j\$(nproc) LDFLAGS='-static'
 
             # 4. 拷贝产物回宿主机
-            cp src/tinc /build/tinc-aarch64-static
+            cp src/tincd /build/tinc-aarch64-static
           "
 
       - name: 验证产物 (检查是否为 musl 纯静态)
