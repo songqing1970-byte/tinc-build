@@ -6,17 +6,28 @@ on:
     branches: [ main, master ]
 
 jobs:
-  build-aarch64:
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch_name: "aarch64"
+            platform: "linux/arm64"
+            artifact_name: "tincd-aarch64-static"
+          - arch_name: "armhf"
+            platform: "linux/arm/v7"
+            artifact_name: "tincd-armhf-static"
+      fail-fast: false
+
     runs-on: ubuntu-latest
     steps:
-      - name: 配置 ARM64 模拟器 (QEMU)
+      - name: 配置 QEMU 跨架构模拟器
         uses: docker/setup-qemu-action@v3
 
-      - name: 在 Alpine aarch64 容器中进行纯静态编译
+      - name: 在 Alpine 容器中编译 纯静态 tincd (${{ matrix.arch_name }})
         run: |
-          docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/build alpine:latest sh -c "
+          docker run --rm --platform ${{ matrix.platform }} -v ${{ github.workspace }}:/build alpine:latest sh -c "
             set -e
-            # 1. 安装 Alpine 官方 musl 编译工具链及依赖静态库
+            # 1. 安装 Alpine 工具链及静态库
             apk add --no-cache build-base gcc make curl tar zlib-dev openssl-dev openssl-libs-static zlib-static
 
             cd /tmp
@@ -25,25 +36,24 @@ jobs:
             tar xzf tinc.tgz
             cd tinc-1.0.36
 
-            # 3. 编译纯静态二进制 (-static -no-pie 彻底禁用 PIE)
+            # 3. 编译纯静态二进制 (-static -no-pie 禁用动态重定位与 PIE)
             ./configure --prefix=/usr --sysconfdir=/etc/tinc --disable-lzo
             make -j\$(nproc) LDFLAGS='-static -no-pie'
 
-            # 4. 剥离调试符号 (Strip) 极大地精简体积
+            # 4. 剥离调试符号精简体积
             strip src/tincd
 
-            # 5. 复制产物 (更正文件名: tinc 1.0.x 的主程序为 tincd)
-            cp src/tincd /build/tincd-aarch64-static
+            # 5. 输出产物到宿主机目录
+            cp src/tincd /build/${{ matrix.artifact_name }}
           "
 
-      - name: 验证产物 (检查是否为真正的 musl 纯静态)
+      - name: 验证产物格式
         run: |
-          file tincd-aarch64-static
-          sha256sum tincd-aarch64-static
+          file ${{ matrix.artifact_name }}
+          sha256sum ${{ matrix.artifact_name }}
           
-          # 验证输出中是否包含 statically linked (且排除了 dynamic / pie)
-          if file tincd-aarch64-static | grep -q "statically linked"; then
-            echo "SUCCESS: 成功生成真正的无 PIE musl 纯静态二进制文件！"
+          if file ${{ matrix.artifact_name }} | grep -q "statically linked"; then
+            echo "SUCCESS: 成功生成真正的 musl 纯静态二进制文件 (${{ matrix.arch_name }})！"
           else
             echo "ERROR: 产物非纯静态，请检查！" && exit 1
           fi
@@ -51,6 +61,6 @@ jobs:
       - name: 上传纯静态二进制
         uses: actions/upload-artifact@v4
         with:
-          name: tincd-aarch64-static
-          path: tincd-aarch64-static
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
           if-no-files-found: error
