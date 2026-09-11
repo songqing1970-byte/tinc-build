@@ -8,7 +8,6 @@ on:
 jobs:
   build-aarch64:
     runs-on: ubuntu-latest
-    # 使用 QEMU + Alpine aarch64 容器，直接在 musl 环境下原生编译
     steps:
       - name: 配置 ARM64 模拟器 (QEMU)
         uses: docker/setup-qemu-action@v3
@@ -17,31 +16,34 @@ jobs:
         run: |
           docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/build alpine:latest sh -c "
             set -e
-            # 1. 安装 Alpine 官方 musl 编译工具链及依赖源码
+            # 1. 安装 Alpine 官方 musl 编译工具链及依赖静态库
             apk add --no-cache build-base gcc make curl tar zlib-dev openssl-dev openssl-libs-static zlib-static
 
             cd /tmp
-            # 2. 下载 tinc 源码
+            # 2. 下载 tinc 1.0.36 源码
             curl -fL -o tinc.tgz https://deb.debian.org/debian/pool/main/t/tinc/tinc_1.0.36.orig.tar.gz
             tar xzf tinc.tgz
             cd tinc-1.0.36
 
-            # 3. 编译纯静态二进制 (musl 环境下 -static 会将 DNS 模块完美打包)
+            # 3. 编译纯静态二进制 (-static -no-pie 彻底禁用 PIE)
             ./configure --prefix=/usr --sysconfdir=/etc/tinc --disable-lzo
-            make -j\$(nproc) LDFLAGS='-static'
+            make -j\$(nproc) LDFLAGS='-static -no-pie'
 
-            # 4. 拷贝产物回宿主机
-            cp src/tincd /build/tinc-aarch64-static
+            # 4. 剥离调试符号 (Strip) 极大地精简体积
+            strip src/tincd
+
+            # 5. 复制产物 (更正文件名: tinc 1.0.x 的主程序为 tincd)
+            cp src/tincd /build/tincd-aarch64-static
           "
 
-      - name: 验证产物 (检查是否为 musl 纯静态)
+      - name: 验证产物 (检查是否为真正的 musl 纯静态)
         run: |
-          file tinc-aarch64-static
-          sha256sum tinc-aarch64-static
+          file tincd-aarch64-static
+          sha256sum tincd-aarch64-static
           
-          # 验证验证信息
-          if file tinc-aarch64-static | grep -q "statically linked"; then
-            echo "SUCCESS: 成功生成真正的 musl 纯静态二进制文件！"
+          # 验证输出中是否包含 statically linked (且排除了 dynamic / pie)
+          if file tincd-aarch64-static | grep -q "statically linked"; then
+            echo "SUCCESS: 成功生成真正的无 PIE musl 纯静态二进制文件！"
           else
             echo "ERROR: 产物非纯静态，请检查！" && exit 1
           fi
@@ -49,6 +51,6 @@ jobs:
       - name: 上传纯静态二进制
         uses: actions/upload-artifact@v4
         with:
-          name: tinc-aarch64-static
-          path: tinc-aarch64-static
+          name: tincd-aarch64-static
+          path: tincd-aarch64-static
           if-no-files-found: error
